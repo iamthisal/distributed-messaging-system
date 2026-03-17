@@ -4,7 +4,12 @@ import requests
 import time
 import threading
 
-SERVER_URL = "http://localhost:8000"
+
+port = input("Enter server port (default 8000): ").strip() or "8000"
+SERVER_URL = f"http://localhost:{port}"
+
+
+#SERVER_URL = "http://localhost:8000"
 POLL_INTERVAL = 3
 seen_message_ids = set()
 
@@ -104,3 +109,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
