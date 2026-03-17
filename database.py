@@ -11,14 +11,14 @@ def add_message(message : dict):
 def get_all_messages() -> List[dict]:
     return messages
 
-def get_messages_for(recipient: str) -> List[dict]:
+def get_messages_for(receiver: str) -> List[dict]:
     """
     Return all messages for a specific recipient.
     Also includes broadcast messages sent to 'all'.
     """
     return [
         m for m in messages
-        if m["recipient"] == recipient or m["recipient"] == "all"
+        if m["receiver"] == receiver or m["receiver"] == "all"
     ]
 
 def clear_all() -> None:
