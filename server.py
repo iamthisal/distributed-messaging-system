@@ -15,14 +15,14 @@ def send_message(request: MessageRequest):
     Client calls this to send a message.
     The server assigns a unique ID and timestamp, then stores it.
     """
-    if not request.text.strip():
+    if not request.content.strip():
         raise HTTPException(status_code=400, detail="Message text cannot be empty")
 
     message = {
         "id": str(uuid.uuid4()),  # unique message ID
         "sender": request.sender,
-        "receiver": request.recipient,
-        "content": request.text,
+        "receiver": request.receiver,
+        "content": request.content,
         "timestamp": datetime.utcnow().isoformat()
     }
 
