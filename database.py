@@ -11,6 +11,15 @@ def add_message(message : dict):
 def get_all_messages() -> List[dict]:
     return messages
 
+
+# time sync - sakindu
+#
+# consensus - dinil
+#
+# fault - nimthara
+#
+# replication -
+
 def get_messages_for(receiver: str) -> List[dict]:
     """
     Return all messages for a specific recipient.

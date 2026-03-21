@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel
 
 class MessageRequest(BaseModel):
@@ -11,5 +13,9 @@ class MessageResponse(BaseModel):
     receiver : str
     content : str
     timestamp : str
+
+class ReplicatedMessageResponse(MessageResponse):
+    replication_status: str = "full"
+    warning: Optional[str] = None
 
 
