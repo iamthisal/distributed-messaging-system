@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List
 
+import httpx
 from fastapi import FastAPI, HTTPException
 
 from database import add_message, get_messages_for, get_all_messages, clear_all
@@ -46,6 +47,20 @@ def root():
 @app.post("/register")
 def register(url: str):
     register_replica(url)
+
+    # sync existing messages to newly joined server
+    try:
+        with httpx.Client() as client:
+            for message in get_all_messages():
+                client.post(
+                    f"{url}/replicate",
+                    json=message,
+                    timeout=2.0
+                )
+        print(f"[SYNC] Sent existing messages to {url}")
+    except Exception:
+        print(f"[SYNC FAILED] Could not sync to {url}")
+
     return {"status": "registered", "replicas": REPLICAS}
 
 @app.post("/replicate", response_model=MessageResponse)
