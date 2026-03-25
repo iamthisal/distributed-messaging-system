@@ -20,6 +20,8 @@ PRIMARY_URL = "http://localhost:8000"
 
 
 
+print(f"[STARTUP] port={port} IS_PRIMARY={IS_PRIMARY}")
+
 
 # ─────────────────────────────────────────────
 # Startup
@@ -69,10 +71,32 @@ def receive_replicated_message(message: MessageResponse):
     print(f"[REPLICATED] {message.sender} → {message.receiver}: {message.content}")
     return message
 
+
+
+
 @app.post("/send", response_model=MessageResponse)
-def send_message(request: MessageRequest):
+def send_message(request: MessageRequest, forwarded_from: str = None):
     if not request.content.strip():
         raise HTTPException(status_code=400, detail="Message text cannot be empty")
+
+    if not IS_PRIMARY:
+        try:
+            with httpx.Client() as client:
+                response = client.post(
+                    f"{PRIMARY_URL}/send",
+                    json={
+                        "sender": request.sender,
+                        "receiver": request.receiver,
+                        "content": request.content
+                    },
+                    params={"forwarded_from": OWN_URL},  # ← tell primary who forwarded
+                    timeout=5.0
+                )
+                print(f"[FORWARDED] to primary {PRIMARY_URL}")
+                return response.json()
+        except Exception as e:
+            print(f"[FORWARD ERROR] exact error: {e}")
+            raise HTTPException(status_code=503, detail="Primary server is unreachable")
 
     message = {
         "id": str(uuid.uuid4()),
@@ -84,11 +108,11 @@ def send_message(request: MessageRequest):
 
     add_message(message)
     print(f"[NEW MESSAGE] {message['sender']} → {message['receiver']}: {message['content']}")
-
-    if IS_PRIMARY:
-        replicate_to_all(message)
-
+    replicate_to_all(message, skip_url=forwarded_from)  # ← skip the one that forwarded
     return message
+
+
+
 
 @app.get("/messages", response_model=List[MessageResponse])
 def get_messages(receiver: str = None):
@@ -103,7 +127,33 @@ def clear_messages():
 
 
 
+""""
 
 
+if not IS_PRIMARY:
+    try:
+        with httpx.Client() as client:
+            response = client.post(
+                f"{PRIMARY_URL}/send",
+                json={
+                    "sender": request.sender,
+                    "receiver": request.receiver,
+                    "content": request.content
+                },
+                timeout=2.0
+            )
+        # moved outside the 'with' block
+        print(f"[FORWARDED] to primary {PRIMARY_URL}")
+        return response.json()
+    except Exception as e:
+        print(f"[FORWARD ERROR] {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Primary server is unreachable: {e}"
+        )
+
+
+
+"""
 
 
