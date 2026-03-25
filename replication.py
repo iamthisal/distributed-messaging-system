@@ -8,9 +8,11 @@ def register_replica(url: str):
         REPLICAS.append(url)
         print(f"[REGISTERED] New replica: {url}")
 
-def replicate_to_all(message: dict):
-    """Forward message to all registered replicas."""
+def replicate_to_all(message: dict, skip_url: str = None):
     for replica_url in REPLICAS:
+        if replica_url == skip_url:
+            print(f"[SKIP] {replica_url} already has this message")
+            continue
         try:
             with httpx.Client() as client:
                 client.post(
@@ -34,3 +36,4 @@ async def register_with_primary(primary_url: str, own_url: str):
         print(f"[REGISTERED] with primary at {primary_url}")
     except Exception:
         print(f"[WARNING] Could not register with primary")
+
