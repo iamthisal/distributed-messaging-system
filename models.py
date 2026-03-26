@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class MessageRequest(BaseModel):
     sender : str
@@ -17,5 +17,10 @@ class MessageResponse(BaseModel):
 class ReplicatedMessageResponse(MessageResponse):
     replication_status: str = "full"
     warning: Optional[str] = None
+
+
+class LeaderAnnouncement(BaseModel):
+    new_primary_url: str
+    known_nodes: List[str] = Field(default_factory=list)
 
 
