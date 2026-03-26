@@ -1,3 +1,4 @@
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -6,72 +7,73 @@ from typing import List
 import httpx
 from fastapi import FastAPI, HTTPException
 
-from database import add_message, get_messages_for, get_all_messages, clear_all
+from database import add_message, clear_all, get_all_messages, get_messages_for
 from models import MessageRequest, MessageResponse
-from replication import REPLICAS, register_replica, replicate_to_all, register_with_primary
+from replication import REPLICAS, register_replica, register_with_primary, replicate_to_all
 
-
-import sys
 
 port = int(sys.argv[-1]) if sys.argv[-1].isdigit() else 8000
 OWN_URL = f"http://localhost:{port}"
-IS_PRIMARY = (port == 8000)
+IS_PRIMARY = port == 8000
 PRIMARY_URL = "http://localhost:8000"
-
-
 
 print(f"[STARTUP] port={port} IS_PRIMARY={IS_PRIMARY}")
 
 
-# ─────────────────────────────────────────────
-# Startup
-# ─────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not IS_PRIMARY:
         await register_with_primary(PRIMARY_URL, OWN_URL)
     yield
 
+
 app = FastAPI(title="Distributed Chat System", lifespan=lifespan)
 
-# ─────────────────────────────────────────────
-# Endpoints
-# ─────────────────────────────────────────────
+
 @app.get("/")
 def root():
     return {
         "status": "running",
         "is_primary": IS_PRIMARY,
         "own_url": OWN_URL,
-        "replicas": REPLICAS
+        "replicas": REPLICAS,
     }
+
 
 @app.post("/register")
 def register(url: str):
     register_replica(url)
 
-    # sync existing messages to newly joined server
+    synced_messages = 0
     try:
         with httpx.Client() as client:
             for message in get_all_messages():
-                client.post(
+                response = client.post(
                     f"{url}/replicate",
                     json=message,
-                    timeout=2.0
+                    timeout=2.0,
                 )
-        print(f"[SYNC] Sent existing messages to {url}")
+                response.raise_for_status()
+                synced_messages += 1
+        print(f"[SYNC] Sent {synced_messages} existing messages to {url}")
     except Exception:
         print(f"[SYNC FAILED] Could not sync to {url}")
 
-    return {"status": "registered", "replicas": REPLICAS}
+    return {
+        "status": "registered",
+        "replicas": REPLICAS,
+        "synced_messages": synced_messages,
+    }
+
 
 @app.post("/replicate", response_model=MessageResponse)
 def receive_replicated_message(message: MessageResponse):
-    add_message(message.dict())
-    print(f"[REPLICATED] {message.sender} → {message.receiver}: {message.content}")
+    stored = add_message(message.dict())
+    if stored:
+        print(f"[REPLICATED] {message.sender} -> {message.receiver}: {message.content}")
+    else:
+        print(f"[DEDUP] Skipped already replicated message {message.id[:8]}")
     return message
-
-
 
 
 @app.post("/send", response_model=MessageResponse)
@@ -84,34 +86,29 @@ def send_message(request: MessageRequest, forwarded_from: str = None):
             with httpx.Client() as client:
                 response = client.post(
                     f"{PRIMARY_URL}/send",
-                    json={
-                        "sender": request.sender,
-                        "receiver": request.receiver,
-                        "content": request.content
-                    },
-                    params={"forwarded_from": OWN_URL},  # ← tell primary who forwarded
-                    timeout=5.0
+                    json=request.dict(),
+                    params={"forwarded_from": OWN_URL},
+                    timeout=5.0,
                 )
-                print(f"[FORWARDED] to primary {PRIMARY_URL}")
-                return response.json()
-        except Exception as e:
-            print(f"[FORWARD ERROR] exact error: {e}")
-            raise HTTPException(status_code=503, detail="Primary server is unreachable")
+                response.raise_for_status()
+            print(f"[FORWARDED] to primary {PRIMARY_URL}")
+            return response.json()
+        except Exception as exc:
+            print(f"[FORWARD ERROR] exact error: {exc}")
+            raise HTTPException(status_code=503, detail="Primary server is unreachable") from exc
 
     message = {
         "id": str(uuid.uuid4()),
         "sender": request.sender,
         "receiver": request.receiver,
         "content": request.content,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
     add_message(message)
-    print(f"[NEW MESSAGE] {message['sender']} → {message['receiver']}: {message['content']}")
-    replicate_to_all(message, skip_url=forwarded_from)  # ← skip the one that forwarded
+    print(f"[NEW MESSAGE] {message['sender']} -> {message['receiver']}: {message['content']}")
+    replicate_to_all(message, skip_url=forwarded_from)
     return message
-
-
 
 
 @app.get("/messages", response_model=List[MessageResponse])
@@ -120,40 +117,8 @@ def get_messages(receiver: str = None):
         return get_messages_for(receiver)
     return get_all_messages()
 
+
 @app.delete("/messages")
 def clear_messages():
     clear_all()
     return {"status": "All messages cleared"}
-
-
-
-""""
-
-
-if not IS_PRIMARY:
-    try:
-        with httpx.Client() as client:
-            response = client.post(
-                f"{PRIMARY_URL}/send",
-                json={
-                    "sender": request.sender,
-                    "receiver": request.receiver,
-                    "content": request.content
-                },
-                timeout=2.0
-            )
-        # moved outside the 'with' block
-        print(f"[FORWARDED] to primary {PRIMARY_URL}")
-        return response.json()
-    except Exception as e:
-        print(f"[FORWARD ERROR] {e}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Primary server is unreachable: {e}"
-        )
-
-
-
-"""
-
-
