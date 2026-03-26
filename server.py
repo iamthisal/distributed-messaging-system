@@ -114,6 +114,17 @@ def initialize_node():
                 primary_url=registration.get("current_primary_url", state["current_primary_url"]),
                 known_nodes=registration.get("known_nodes", state["known_nodes"]),
             )
+        else:
+            rediscovered_primary = discover_primary(state["known_nodes"], OWN_URL)
+            update_cluster_state(primary_url=rediscovered_primary, known_nodes=state["known_nodes"])
+            state = get_state_snapshot()
+            if not state["is_primary"]:
+                registration = register_with_primary(state["current_primary_url"], OWN_URL)
+                if registration:
+                    update_cluster_state(
+                        primary_url=registration.get("current_primary_url", state["current_primary_url"]),
+                        known_nodes=registration.get("known_nodes", state["known_nodes"]),
+                    )
 
 
 def heartbeat_loop():
@@ -177,6 +188,36 @@ def forward_send_to_primary(request: MessageRequest):
         raise HTTPException(status_code=503, detail="Primary server is unreachable") from exc
 
 
+def forward_register_to_primary(url: str):
+    state = get_state_snapshot()
+
+    try:
+        with httpx.Client() as client:
+            response = client.post(
+                f"{state['current_primary_url']}/register",
+                params={"url": url},
+                timeout=3.0,
+            )
+            response.raise_for_status()
+        return response.json()
+    except Exception:
+        new_primary_url = elect_new_primary(state["current_primary_url"])
+        if new_primary_url == OWN_URL:
+            return None
+
+    try:
+        with httpx.Client() as client:
+            response = client.post(
+                f"{new_primary_url}/register",
+                params={"url": url},
+                timeout=3.0,
+            )
+            response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Primary server is unreachable: {exc}") from exc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global heartbeat_thread
@@ -217,9 +258,14 @@ def leader():
 @app.post("/register")
 def register(url: str):
     state = get_state_snapshot()
-    if state["is_primary"]:
-        update_cluster_state(known_nodes=state["known_nodes"] + [url])
-        register_replica(url)
+    if not state["is_primary"]:
+        forwarded = forward_register_to_primary(url)
+        if forwarded is not None:
+            return forwarded
+        state = get_state_snapshot()
+
+    update_cluster_state(known_nodes=state["known_nodes"] + [url])
+    register_replica(url)
 
     synced_messages = 0
     try:
