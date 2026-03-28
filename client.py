@@ -1,5 +1,3 @@
-
-
 import requests
 import time
 import threading
@@ -7,9 +5,6 @@ import threading
 
 port = input("Enter server port (default 8000): ").strip() or "8000"
 SERVER_URL = f"http://localhost:{port}"
-
-
-#SERVER_URL = "http://localhost:8000"
 POLL_INTERVAL = 3
 seen_message_ids = set()
 
@@ -18,17 +13,17 @@ def send_message(sender: str, recipient: str, text: str):
     payload = {
         "sender": sender,
         "receiver": recipient,
-        "content": text
+        "content": text,
     }
     try:
         response = requests.post(f"{SERVER_URL}/send", json=payload)
         response.raise_for_status()
         msg = response.json()
-        print(f"  ✓ Message sent (ID: {msg['id'][:8]}...)")
+        print(f"  ? Message sent (ID: {msg['id'][:8]}...)")
     except requests.exceptions.ConnectionError:
-        print("  ✗ Could not connect to server. Is it running?")
+        print("  ? Could not connect to server. Is it running?")
     except Exception as e:
-        print(f"  ✗ Error sending message: {e}")
+        print(f"  ? Error sending message: {e}")
 
 
 def poll_for_messages(my_name: str):
@@ -37,7 +32,7 @@ def poll_for_messages(my_name: str):
         try:
             response = requests.get(
                 f"{SERVER_URL}/messages",
-                params={"receiver": my_name}
+                params={"receiver": my_name},
             )
             response.raise_for_status()
             all_messages = response.json()
@@ -46,13 +41,14 @@ def poll_for_messages(my_name: str):
                 if msg["id"] not in seen_message_ids:
                     seen_message_ids.add(msg["id"])
                     if msg["sender"] != my_name:
-                        print(f"\n  📨 [{msg['timestamp']}] {msg['sender']} → you: {msg['content']}")
+                        display_timestamp = msg.get("corrected_timestamp", msg["timestamp"])
+                        print(f"\n  ?? [{display_timestamp}] {msg['sender']} ? you: {msg['content']}")
                         print("  > ", end="", flush=True)
 
         except requests.exceptions.ConnectionError:
-            print("\n  ✗ Lost connection to server...")
+            print("\n  ? Lost connection to server...")
         except Exception as e:
-            print(f"\n  ✗ Polling error: {e}")
+            print(f"\n  ? Polling error: {e}")
 
         time.sleep(POLL_INTERVAL)
 
@@ -69,14 +65,14 @@ def main():
 
     print(f"\nWelcome, {my_name}!")
     print("Commands:")
-    print("  @Bob Hello there   → send 'Hello there' to Bob")
-    print("  @all Hey everyone  → broadcast to all users")
-    print("  quit               → exit\n")
+    print("  @Bob Hello there   ? send 'Hello there' to Bob")
+    print("  @all Hey everyone  ? broadcast to all users")
+    print("  quit               ? exit\n")
 
     poll_thread = threading.Thread(
         target=poll_for_messages,
         args=(my_name,),
-        daemon=True
+        daemon=True,
     )
     poll_thread.start()
 
@@ -109,5 +105,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

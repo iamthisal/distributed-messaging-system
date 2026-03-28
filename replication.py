@@ -74,6 +74,20 @@ def fetch_node_status(node_url: str):
         return None
 
 
+def fetch_time_sync(node_url: str, client_send_time_ms: int):
+    try:
+        with httpx.Client() as client:
+            response = client.post(
+                f"{node_url}/time-sync",
+                json={"client_send_time_ms": client_send_time_ms},
+                timeout=2.0,
+            )
+            response.raise_for_status()
+        return response.json()
+    except Exception:
+        return None
+
+
 def discover_primary(known_nodes: list[str], own_url: str) -> str:
     for node_url in sort_nodes(known_nodes + [own_url]):
         status = fetch_node_status(node_url)
