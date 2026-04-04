@@ -1,6 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
+httpx
 requests
 pydantic
-httpx
-
+pytest
+pytest-asyncio
