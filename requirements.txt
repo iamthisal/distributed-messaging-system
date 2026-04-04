@@ -8,5 +8,6 @@ pytest-asyncio
 uvicorn
 requests
 pydantic
+httpx
 
 >>>>>>> 445e980de18d12a6d37ffd827768a266c0913950
