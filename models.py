@@ -38,3 +38,29 @@ class TimeSyncResponse(BaseModel):
     own_url: str
     server_receive_time_ms: int
     server_send_time_ms: int
+
+
+class RaftVoteRequest(BaseModel):
+    candidate_id: int
+    candidate_url: str
+    term: int
+    last_logical_timestamp: int
+
+
+class RaftVoteResponse(BaseModel):
+    term: int
+    vote_granted: bool
+    responder_id: int
+
+
+class RaftAppendEntriesRequest(BaseModel):
+    leader_id: int
+    leader_url: str
+    term: int
+    commit_index: int
+    known_nodes: List[str] = Field(default_factory=list)
+
+
+class RaftAppendEntriesResponse(BaseModel):
+    term: int
+    success: bool
