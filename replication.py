@@ -5,6 +5,8 @@ DEFAULT_NODE_URLS = [
     "http://localhost:8000",
     "http://localhost:8001",
     "http://localhost:8002",
+    "http://localhost:8003",
+    "http://localhost:8004",
 ]
 BOOTSTRAP_PRIMARY_URL = DEFAULT_NODE_URLS[0]
 REPLICAS: list[str] = []
