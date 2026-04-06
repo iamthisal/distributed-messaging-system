@@ -6,10 +6,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import List
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from database import (
     add_message,
@@ -51,6 +55,8 @@ MAX_ACCEPTABLE_RTT_MS = 2_000
 RAFT_REQUEST_TIMEOUT_SECONDS = 2.0
 RAFT_ELECTION_RETRY_LIMIT = 2
 MANUAL_CLOCK_SKEW_MS = int(os.getenv("CHAT_CLOCK_SKEW_MS", "0"))
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
 
 port = int(sys.argv[-1]) if sys.argv[-1].isdigit() else 8000
 NODE_ID = port
@@ -555,11 +561,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Distributed Chat System", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
-def root():
+def root(request: Request):
     state = get_state_snapshot()
+    accepts_html = "text/html" in request.headers.get("accept", "")
+    if accepts_html:
+        return FileResponse(STATIC_DIR / "index.html")
     return {"status": "running", **state, "replicas": REPLICAS}
 
 
@@ -612,6 +629,35 @@ def raft_state():
         "commit_index": state["raft_commit_index"],
         "current_primary_url": state["current_primary_url"],
         "known_nodes": state["known_nodes"],
+    }
+
+
+@app.get("/ui/status")
+def ui_status():
+    state = get_state_snapshot()
+    return {
+        "server": {
+            "own_url": state["own_url"],
+            "current_primary_url": state["current_primary_url"],
+            "is_primary": state["is_primary"],
+            "known_nodes": state["known_nodes"],
+            "replicas": REPLICAS,
+        },
+        "time": {
+            "clock_offset_ms": state["clock_offset_ms"],
+            "logical_clock": state["logical_clock"],
+            "last_sync_at": state["last_sync_at"],
+            "sync_status": state["sync_status"],
+            "best_sync_rtt_ms": state["best_sync_rtt_ms"],
+            "manual_clock_skew_ms": state["manual_clock_skew_ms"],
+        },
+        "raft": {
+            "node_id": NODE_ID,
+            "term": state["raft_current_term"],
+            "role": state["raft_role"],
+            "voted_for": state["raft_voted_for"],
+            "commit_index": state["raft_commit_index"],
+        },
     }
 
 
