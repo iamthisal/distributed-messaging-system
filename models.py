@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MessageRequest(BaseModel):
@@ -17,6 +17,20 @@ class MessageResponse(BaseModel):
     timestamp: str
     corrected_timestamp: str
     logical_timestamp: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_message(cls, value):
+        # Fault-tolerance nodes and older WAL entries predate time-sync fields.
+        if isinstance(value, dict):
+            value = dict(value)
+            value.setdefault("corrected_timestamp", value.get("timestamp"))
+            value.setdefault("logical_timestamp", 0)
+        return value
+
+
+class ReplicationAcknowledgement(MessageResponse):
+    status: str
 
 
 class ReplicatedMessageResponse(MessageResponse):

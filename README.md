@@ -20,6 +20,10 @@ A Python-based distributed messaging system built with FastAPI. The prototype su
 - `client.py` - Command-line chat client for testing.
 - `static/` - Browser UI assets (`index.html`, `styles.css`, `app.js`).
 - `requirements.txt` - Python dependencies.
+- `fault_tolerance.py` - Per-node WAL, pending-write recovery, and recovery scheduling.
+- `node_manager.py` - Health probes and node down/recovery callbacks; uses the server's current primary.
+- `test_fault_tolerance.py` - Live-cluster fault-tolerance scenarios.
+- `benchmark.py` - Live-cluster latency, throughput, and WAL benchmarks.
 
 ## System Overview
 
@@ -38,6 +42,8 @@ Main features:
 - automatic failover and re-election
 - node rejoin and message recovery
 - hybrid time synchronization
+- WAL protection for local and replicated messages
+- replica retries and delta recovery for rejoining nodes
 - built-in web UI for chat and cluster monitoring
 
 ## How to Run the Prototype
@@ -92,7 +98,7 @@ If you want to test using the terminal client instead of the browser:
 python client.py
 ```
 
-Then enter the server port and your username when prompted.
+The client discovers the current primary across all five ports. Enter your username when prompted.
 
 ## Typical Demo Flow
 
@@ -117,11 +123,24 @@ Then enter the server port and your username when prompted.
 | GET | `/time-status` | Time synchronization status |
 | GET | `/raft/state` | Raft consensus state |
 | GET | `/ui/status` | Aggregated UI cluster status |
+| GET | `/health` | Health probe used by fault detection |
+| GET | `/role` | Primary/replica role and current primary |
+| GET | `/status` | Cluster, replica, and message status |
+| GET | `/ft-status` | WAL statistics and pending recoveries |
+| GET | `/sync` | All messages, or messages after `?since=<timestamp>` |
+| POST | `/rejoin` | Push missed messages to `?url=<node>&since=<timestamp>` |
 | DELETE | `/messages` | Clear messages for testing |
 
 ## Notes
 
-- Messages are stored in memory, so a full cluster shutdown clears all history.
+- Messages are held in memory. Each node writes `wal_node_<port>.log` before storing a message; pending writes are replayed on restart. Committed entries are compacted periodically, so the WAL is not a permanent message archive and a full cluster shutdown can lose committed history.
 - Rejoining nodes can recover older messages from the current leader as long as at least one active node still has the data.
 - The cluster uses a fixed predefined node list rather than fully dynamic membership discovery.
 - Do not use `--reload` when starting nodes, because port-based node identification depends on the actual process port.
+- `MY_URL` may override node identity when needed; its port also selects the WAL file.
+
+## Fault-tolerance Tests and Benchmarks
+
+With nodes on ports 8000, 8001, and 8002 running, run `python test_fault_tolerance.py` for the interactive fault-tolerance scenarios or `python benchmark.py` for benchmarks. The scenario script stops and restarts nodes; use a disposable demo cluster. The server uses the existing Raft election and forwarding paths, while health monitoring schedules recovery when nodes return.
+
+Run isolated integration tests with `python -m pytest test_merge_integration.py -q`.
