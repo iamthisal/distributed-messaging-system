@@ -11,9 +11,11 @@ from pathlib import Path
 # ─────────────────────────────────────────
 
 # WAL file is per-node — each node gets its own log file
-# MY_URL env var must be set when starting each server instance:
+# Node identity follows the server port, with an optional MY_URL override:
 #   MY_URL=http://localhost:8001 uvicorn server:app --port 8001
-_my_port = os.environ.get("MY_URL", "http://localhost:8000").split(":")[-1]
+from node_manager import MY_URL
+
+_my_port = MY_URL.rstrip("/").split(":")[-1]
 WAL_FILE = f"wal_node_{_my_port}.log"
 WAL_LOCK = threading.Lock()
 
@@ -287,7 +289,10 @@ def _do_recovery(node_url: str, down_since: str, primary_url: str):
                 params=params,
                 timeout=RECOVERY_TIMEOUT
             )
+            response.raise_for_status()
             result = response.json()
+            if result.get("messages_failed", 0):
+                return False
 
         print(f"[RECOVERY MANAGER] ✓ Recovery complete for {node_url}: "
               f"{result.get('messages_sent', 0)} messages sent")
@@ -338,6 +343,8 @@ def start_recovery_manager(get_primary_fn):
     so that hot-reloads (--reload) don't fire duplicate recoveries per event.
     """
     global _recovery_manager_running, _schedule_recovery_registered
+    if _recovery_manager_running:
+        return
 
     # Import here to avoid circular import at module level
     from node_manager import on_node_recover
@@ -356,6 +363,11 @@ def start_recovery_manager(get_primary_fn):
     )
     thread.start()
     print("[RECOVERY MANAGER] Background thread started")
+
+
+def stop_recovery_manager():
+    global _recovery_manager_running
+    _recovery_manager_running = False
 
 
 # ─────────────────────────────────────────

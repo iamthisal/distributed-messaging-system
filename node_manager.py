@@ -3,18 +3,20 @@ import os
 from datetime import datetime
 import time
 import threading
+import sys
+from replication import DEFAULT_NODE_URLS
 
 # ─────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────
 
-MY_URL = os.environ.get("MY_URL", "http://localhost:8000")
+_port = int(sys.argv[-1]) if sys.argv[-1].isdigit() else 8000
+MY_URL = os.environ.get("MY_URL", f"http://localhost:{_port}")
 
-ALL_SERVERS = [
-    "http://localhost:8000",
-    "http://localhost:8001",
-    "http://localhost:8002"
-]
+ALL_SERVERS = list(DEFAULT_NODE_URLS)
+_primary_provider = None
+_heartbeat_stop = threading.Event()
+_heartbeat_thread = None
 
 HEARTBEAT_INTERVAL = 5
 PROBE_TIMEOUT = 2
@@ -109,6 +111,8 @@ def get_primary() -> str | None:
     The alive node with the lowest port number is primary.
     Self is always included as a candidate (we are always alive).
     """
+    if _primary_provider is not None:
+        return _primary_provider()
     with _lock:
         candidates = set(alive_servers)
         candidates.add(MY_URL)  # always include self
@@ -168,17 +172,23 @@ def try_register_with_primary():
 # ─────────────────────────────────────────
 
 def _heartbeat_loop():
-    while True:
+    while not _heartbeat_stop.is_set():
         check_alive_servers()
         try_register_with_primary()
-        time.sleep(HEARTBEAT_INTERVAL)
+        _heartbeat_stop.wait(HEARTBEAT_INTERVAL)
 
 
-def start_heartbeat():
+def start_heartbeat(primary_provider=None):
+    global _primary_provider, _heartbeat_thread
+    _primary_provider = primary_provider
+    if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+        return
+    _heartbeat_stop.clear()
     print(f"[NODE MANAGER] Starting — I am {MY_URL}")
-    check_alive_servers()
-    try_register_with_primary()
-
-    thread = threading.Thread(target=_heartbeat_loop, daemon=True)
-    thread.start()
+    _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    _heartbeat_thread.start()
     print(f"[NODE MANAGER] Heartbeat started (interval={HEARTBEAT_INTERVAL}s, timeout={PROBE_TIMEOUT}s)")
+
+
+def stop_heartbeat():
+    _heartbeat_stop.set()

@@ -5,6 +5,12 @@ import sys
 import os
 from datetime import datetime, timezone
 
+# This interactive suite kills and restarts a real demo cluster. Keep routine
+# pytest runs isolated; execute this file directly for the live scenarios.
+if __name__ != "__main__":
+    import pytest
+    pytestmark = pytest.mark.skip(reason="Run python test_fault_tolerance.py against a disposable cluster")
+
 SERVERS = {
     "node_8000": "http://localhost:8000",
     "node_8001": "http://localhost:8001",

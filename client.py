@@ -6,7 +6,9 @@ import threading
 SERVER_LIST = [
     "http://localhost:8000",
     "http://localhost:8001",
-    "http://localhost:8002"
+    "http://localhost:8002",
+    "http://localhost:8003",
+    "http://localhost:8004",
 ]
 
 POLL_INTERVAL = 3
@@ -95,7 +97,8 @@ def poll_for_messages(my_name: str):
                 if msg["id"] not in seen_message_ids:
                     seen_message_ids.add(msg["id"])
                     if msg["sender"] != my_name:
-                        print(f"\n  📨 [{msg['timestamp']}] {msg['sender']} → you: {msg['content']}")
+                        display_timestamp = msg.get("corrected_timestamp", msg["timestamp"])
+                        print(f"\n  📨 [{display_timestamp}] {msg['sender']} → you: {msg['content']}")
                         print(f"  [via {server}]")
                         print("  > ", end="", flush=True)
 

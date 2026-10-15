@@ -1,146 +1,146 @@
-# Distributed Chat System
+# Distributed Messaging System
 
-A fault-tolerant, distributed messaging system built with Python and FastAPI. Messages are replicated across a cluster of nodes, with automatic primary election, crash recovery via a Write-Ahead Log (WAL), and delta sync for rejoining nodes.
+A Python-based distributed messaging system built with FastAPI. The prototype supports message replication, leader-based coordination, failure detection, automatic failover, node rejoin recovery, time synchronization, and a built-in web UI for demonstration.
 
-## Team
+## Team Members
 
-| Name | Registration No. | Email | Role |
-|------|-----------------|-------|------|
-|      |                 |       | Fault Tolerance |
-|      |                 |       | Data Replication & Consistency |
-|      |                 |       | Time Synchronization |
-|      |                 |       | Consensus & Agreement |
+| Registration Number | Name | Responsibility | Email |
+|---|---|---|---|
+| IT24610327 | W.V.N.S. Vithanage | Fault Tolerance | IT24610327@my.sliit.lk |
+| IT24101868 | Wickramathanthri T.D. | Data Replication and Consistency | IT24101868@my.sliit.lk |
+| IT24103737 | D.P.S. Wickramasinghe | Time Synchronization | IT24103737@my.sliit.lk |
+| IT24101519 | Hettiarachchi S.D.D. | Consensus and Agreement Algorithms | IT24101519@my.sliit.lk |
 
 ## Project Structure
 
-```
-.
-├── server.py            # FastAPI server — all HTTP endpoints
-├── client.py            # CLI client for sending and receiving messages
-├── database.py          # In-memory message store
-├── models.py            # Pydantic request/response models
-├── node_manager.py      # Heartbeat, failure detection, primary election
-├── replication.py       # Replica registration and message push logic
-├── fault_tolerance.py   # WAL, crash recovery, automatic recovery manager
-├── benchmark.py         # Performance benchmarks (latency, throughput, WAL)
-├── test_fault_tolerance.py  # Automated fault tolerance test suite (9 tests)
-└── requirements.txt
-```
+- `server.py` - Main FastAPI server. Handles chat APIs, replication, failover, time sync, Raft state, and the built-in web UI.
+- `replication.py` - Cluster communication helpers for replication, registration, node discovery, and leader announcement.
+- `database.py` - In-memory message storage with deduplication, sorting, and thread-safe access.
+- `models.py` - Pydantic request/response models used by the API.
+- `client.py` - Command-line chat client for testing.
+- `static/` - Browser UI assets (`index.html`, `styles.css`, `app.js`).
+- `requirements.txt` - Python dependencies.
+- `fault_tolerance.py` - Per-node WAL, pending-write recovery, and recovery scheduling.
+- `node_manager.py` - Health probes and node down/recovery callbacks; uses the server's current primary.
+- `test_fault_tolerance.py` - Live-cluster fault-tolerance scenarios.
+- `benchmark.py` - Live-cluster latency, throughput, and WAL benchmarks.
 
-## Architecture Overview
+## System Overview
 
-The system runs as a cluster of 3 nodes (ports 8000, 8001, 8002). At any time, one node is the **primary** and the others are **replicas**.
+The system runs multiple server nodes on predefined ports:
 
-- **Primary election** is deterministic: the alive node with the lowest port number becomes primary. All nodes run the same election logic independently — no coordination required.
-- **Only the primary accepts** `/send` requests. Replicas store messages pushed to them via `/replicate`.
-- **Heartbeats** run every 5 seconds. If a node goes down, the next lowest-port alive node automatically becomes primary.
-- **WAL (Write-Ahead Log)**: before storing any message, the primary writes a `PENDING` entry to a per-node log file. On restart, any `PENDING` entries are recovered before the node accepts traffic.
-- **Delta sync**: when a node rejoins after a crash, only the messages it missed (since `down_since`) are pushed to it — not the full history.
+- `8000`
+- `8001`
+- `8002`
+- `8003`
+- `8004`
 
-## Requirements
+Main features:
+
+- leader-based message replication
+- heartbeat-based failure detection
+- automatic failover and re-election
+- node rejoin and message recovery
+- hybrid time synchronization
+- WAL protection for local and replicated messages
+- replica retries and delta recovery for rejoining nodes
+- built-in web UI for chat and cluster monitoring
+
+## How to Run the Prototype
+
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Contents of `requirements.txt`:
-```
-fastapi
-uvicorn
-requests
-pydantic
-httpx
-```
+### 2. Start server nodes
 
-## Running the Cluster
+Open a separate terminal for each node you want to run:
 
-Each node needs its own terminal and must know its own URL via the `MY_URL` environment variable.
-
-**Linux / macOS:**
 ```bash
-MY_URL=http://localhost:8000 uvicorn server:app --port 8000
-MY_URL=http://localhost:8001 uvicorn server:app --port 8001
-MY_URL=http://localhost:8002 uvicorn server:app --port 8002
+uvicorn server:app --port 8000
+uvicorn server:app --port 8001
+uvicorn server:app --port 8002
+uvicorn server:app --port 8003
+uvicorn server:app --port 8004
 ```
 
-**Windows (PowerShell):**
-```powershell
-$env:MY_URL="http://localhost:8000"; uvicorn server:app --port 8000
-$env:MY_URL="http://localhost:8001"; uvicorn server:app --port 8001
-$env:MY_URL="http://localhost:8002"; uvicorn server:app --port 8002
+You may run all five nodes for the full demo, or start a smaller subset for testing.
+
+### 3. Open the frontend
+
+After starting at least one server, open a browser and go to:
+
+```text
+http://localhost:8000/
 ```
 
-Node 8000 will be elected primary on startup (lowest port).
+You can also open the UI from any active node:
 
-## Running the Client
+- `http://localhost:8001/`
+- `http://localhost:8002/`
+- `http://localhost:8003/`
+- `http://localhost:8004/`
 
-In a separate terminal:
+In the web UI you can:
+
+- enter your username
+- choose the server you want to connect to
+- send direct or broadcast messages
+- monitor current leader, node state, time sync, and Raft status
+
+### 4. Optional: Run the command-line client
+
+If you want to test using the terminal client instead of the browser:
+
 ```bash
 python client.py
 ```
 
-Enter your name when prompted. The client auto-discovers the current primary and polls for new messages every 3 seconds.
+The client discovers the current primary across all five ports. Enter your username when prompted.
 
-**Commands:**
-- `@Bob Hello there` — send a message to Bob
-- `@all Hey everyone` — broadcast to all users
-- `quit` — exit
+## Typical Demo Flow
 
-If the primary goes down, the client will automatically find the new primary on the next send.
+1. Start nodes on `8000` to `8004`.
+2. Open the UI in the browser from one of the running nodes.
+3. Choose a server from the UI dropdown and log in with a username.
+4. Send messages between users.
+5. Stop the current leader to observe failover.
+6. Restart the stopped node to observe rejoin and message recovery.
 
-## API Endpoints
+## Useful Endpoints
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Node liveness check |
-| GET | `/role` | Returns `primary` or `replica`, and who the current primary is |
-| GET | `/status` | Full cluster status: alive nodes, replica states, message count |
-| GET | `/ft-status` | Fault tolerance snapshot: WAL stats, pending recoveries |
-| POST | `/send` | Send a new message (primary only) |
-| GET | `/messages` | Retrieve all messages, or filter by `?receiver=Name` |
-| POST | `/replicate` | Accept a replicated message from the primary (internal) |
-| POST | `/register` | Register a node as a replica (internal) |
-| GET | `/sync` | Delta sync: messages after `?since=<timestamp>` |
-| POST | `/rejoin` | Trigger recovery for a rejoining node: `?url=...&since=...` |
-| DELETE | `/messages` | Clear all messages (testing only) |
+|---|---|---|
+| GET | `/` | Root endpoint and browser UI entry |
+| POST | `/send` | Send a new message |
+| GET | `/messages` | Retrieve messages |
+| POST | `/replicate` | Receive replicated messages from leader |
+| POST | `/register` | Register or re-register a node |
+| GET | `/heartbeat` | Node liveness and cluster state |
+| GET | `/leader` | Current leader information |
+| GET | `/time-status` | Time synchronization status |
+| GET | `/raft/state` | Raft consensus state |
+| GET | `/ui/status` | Aggregated UI cluster status |
+| GET | `/health` | Health probe used by fault detection |
+| GET | `/role` | Primary/replica role and current primary |
+| GET | `/status` | Cluster, replica, and message status |
+| GET | `/ft-status` | WAL statistics and pending recoveries |
+| GET | `/sync` | All messages, or messages after `?since=<timestamp>` |
+| POST | `/rejoin` | Push missed messages to `?url=<node>&since=<timestamp>` |
+| DELETE | `/messages` | Clear messages for testing |
 
-## Running the Tests
+## Notes
 
-With all 3 nodes running, execute the automated test suite:
+- Messages are held in memory. Each node writes `wal_node_<port>.log` before storing a message; pending writes are replayed on restart. Committed entries are compacted periodically, so the WAL is not a permanent message archive and a full cluster shutdown can lose committed history.
+- Rejoining nodes can recover older messages from the current leader as long as at least one active node still has the data.
+- The cluster uses a fixed predefined node list rather than fully dynamic membership discovery.
+- Do not use `--reload` when starting nodes, because port-based node identification depends on the actual process port.
+- `MY_URL` may override node identity when needed; its port also selects the WAL file.
 
-```bash
-python test_fault_tolerance.py
-```
+## Fault-tolerance Tests and Benchmarks
 
-The suite runs 9 tests automatically, including killing and restarting nodes:
+With nodes on ports 8000, 8001, and 8002 running, run `python test_fault_tolerance.py` for the interactive fault-tolerance scenarios or `python benchmark.py` for benchmarks. The scenario script stops and restarts nodes; use a disposable demo cluster. The server uses the existing Raft election and forwarding paths, while health monitoring schedules recovery when nodes return.
 
-| Test | What it checks |
-|------|---------------|
-| 1 | All 3 nodes respond to `/health` |
-| 2 | Primary election selects port 8000 |
-| 3 | Messages replicate to all nodes |
-| 4 | Killing 8000 triggers failover to 8001 |
-| 5 | Restarting 8000 syncs all missed messages |
-| 6 | System accepts messages when one replica is down |
-| 7 | WAL has no stuck PENDING entries |
-| 8 | Duplicate messages are correctly rejected |
-| 9 | Messages are recovered from WAL after a crash |
-
-## Running the Benchmark
-
-With all 3 nodes running:
-
-```bash
-python benchmark.py
-```
-
-Measures latency, throughput, replication time, WAL status, and manual recovery time.
-
-## WAL Log Files
-
-Each node writes its own WAL file at startup:
-- `wal_node_8000.log`
-- `wal_node_8001.log`
-- `wal_node_8002.log`
-
-Each line is a newline-delimited JSON entry with state `PENDING`, `COMMITTED`, or `FAILED`. Committed entries are cleaned up automatically every ~60 seconds by the background recovery manager.
+Run isolated integration tests with `python -m pytest test_merge_integration.py -q`.
