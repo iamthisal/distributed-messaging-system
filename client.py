@@ -42,7 +42,7 @@ def poll_for_messages(my_name: str):
                     seen_message_ids.add(msg["id"])
                     if msg["sender"] != my_name:
                         display_timestamp = msg.get("corrected_timestamp", msg["timestamp"])
-                        print(f"\n  ?? [{display_timestamp}] {msg['sender']} ? you: {msg['content']}")
+                        print(f"\n  📨 [{display_timestamp}] {msg['sender']} → you: {msg['content']}")
                         print("  > ", end="", flush=True)
 
         except requests.exceptions.ConnectionError:
