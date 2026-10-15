@@ -673,4 +673,3 @@ def request_vote(payload: RaftVoteRequest):
             "responder_id": NODE_ID,
         }
 
-        
