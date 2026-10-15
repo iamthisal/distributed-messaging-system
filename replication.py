@@ -1,4 +1,7 @@
 import httpx
+import threading
+import time
+from datetime import datetime
 
 
 DEFAULT_NODE_URLS = [
@@ -10,6 +13,13 @@ DEFAULT_NODE_URLS = [
 ]
 BOOTSTRAP_PRIMARY_URL = DEFAULT_NODE_URLS[0]
 REPLICAS: list[str] = []
+REPLICA_STATUS = {}
+REPLICA_LAST_FAIL = {}
+_state_lock = threading.Lock()
+MAX_RETRY_ATTEMPTS = 3
+RETRY_BASE_DELAY = 0.5
+RETRY_BACKOFF = 2.0
+REPLICATE_TIMEOUT = 2.0
 
 
 def get_port(url: str) -> int:
@@ -21,33 +31,69 @@ def sort_nodes(urls: list[str]) -> list[str]:
 
 
 def set_replicas(urls: list[str], own_url: str):
-    REPLICAS[:] = [url for url in sort_nodes(urls) if url != own_url]
+    with _state_lock:
+        REPLICAS[:] = [url for url in sort_nodes(urls) if url != own_url]
 
 
 def register_replica(url: str):
-    if url not in REPLICAS:
-        REPLICAS.append(url)
-        REPLICAS[:] = sort_nodes(REPLICAS)
-        print(f"[REGISTERED] New replica: {url}")
+    with _state_lock:
+        if url not in REPLICAS:
+            REPLICAS.append(url)
+            REPLICAS[:] = sort_nodes(REPLICAS)
+        REPLICA_STATUS[url] = True
+        REPLICA_LAST_FAIL.pop(url, None)
+
+
+def mark_replica_recovered(url: str, down_since: str = None):
+    with _state_lock:
+        REPLICA_STATUS[url] = True
+        REPLICA_LAST_FAIL.pop(url, None)
+
+
+def mark_replica_down(url: str):
+    with _state_lock:
+        REPLICA_STATUS[url] = False
+        REPLICA_LAST_FAIL.setdefault(url, datetime.utcnow().isoformat())
+
+
+def get_replica_status():
+    with _state_lock:
+        return {
+            url: {"up": REPLICA_STATUS.get(url, False),
+                  "last_failure": REPLICA_LAST_FAIL.get(url)}
+            for url in REPLICAS
+        }
+
+
+def _push_to_replica(replica_url: str, message: dict) -> bool:
+    delay = RETRY_BASE_DELAY
+    for attempt in range(MAX_RETRY_ATTEMPTS):
+        try:
+            with httpx.Client() as client:
+                response = client.post(
+                    f"{replica_url}/replicate", json=message, timeout=REPLICATE_TIMEOUT,
+                )
+                response.raise_for_status()
+            mark_replica_recovered(replica_url)
+            return True
+        except Exception:
+            if attempt < MAX_RETRY_ATTEMPTS - 1:
+                time.sleep(delay)
+                delay *= RETRY_BACKOFF
+    mark_replica_down(replica_url)
+    return False
 
 
 def replicate_to_all(message: dict, skip_url: str = None):
-    for replica_url in list(REPLICAS):
+    with _state_lock:
+        targets = list(REPLICAS)
+    for replica_url in targets:
         if replica_url == skip_url:
             print(f"[SKIP] {replica_url} already has this message")
             continue
 
-        try:
-            with httpx.Client() as client:
-                response = client.post(
-                    f"{replica_url}/replicate",
-                    json=message,
-                    timeout=2.0,
-                )
-                response.raise_for_status()
-            print(f"[REPLICATION SUCCESS] -> {replica_url}")
-        except Exception:
-            print(f"[REPLICATION FAILED] -> {replica_url} is down, skipping")
+        _push_to_replica(replica_url, message)
+    return True
 
 
 def register_with_primary(primary_url: str, own_url: str):

@@ -26,6 +26,7 @@ from models import (
     LeaderAnnouncement,
     MessageRequest,
     MessageResponse,
+    ReplicationAcknowledgement,
     RaftAppendEntriesRequest,
     RaftAppendEntriesResponse,
     RaftVoteRequest,
@@ -46,6 +47,17 @@ from replication import (
     replicate_to_all,
     set_replicas,
     sort_nodes,
+    get_replica_status,
+    mark_replica_down,
+    mark_replica_recovered,
+)
+from node_manager import (
+    MY_URL, get_alive_servers, on_node_down, on_node_recover,
+    start_heartbeat, stop_heartbeat,
+)
+from fault_tolerance import (
+    wal_write, wal_commit, wal_fail, recover_from_wal,
+    start_recovery_manager, stop_recovery_manager, get_fault_tolerance_status,
 )
 
 
@@ -58,9 +70,9 @@ MANUAL_CLOCK_SKEW_MS = int(os.getenv("CHAT_CLOCK_SKEW_MS", "0"))
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-port = int(sys.argv[-1]) if sys.argv[-1].isdigit() else 8000
+port = int(MY_URL.rstrip("/").rsplit(":", 1)[1])
 NODE_ID = port
-OWN_URL = f"http://localhost:{port}"
+OWN_URL = MY_URL
 CURRENT_PRIMARY_URL = BOOTSTRAP_PRIMARY_URL
 KNOWN_NODES = sort_nodes(DEFAULT_NODE_URLS + [OWN_URL])
 state_lock = threading.Lock()
@@ -552,12 +564,27 @@ def forward_register_to_primary(url: str):
 async def lifespan(app: FastAPI):
     global heartbeat_thread
 
+    on_node_down(mark_replica_down)
+    on_node_recover(mark_replica_recovered)
     initialize_node()
+    recover_from_wal(
+        lambda message: add_message(MessageResponse.model_validate(message).model_dump()),
+        lambda: get_state_snapshot()["current_primary_url"],
+        OWN_URL,
+    )
+    ensure_logical_clock_floor()
+    ensure_raft_commit_index_floor()
+    start_heartbeat(lambda: get_state_snapshot()["current_primary_url"])
+    start_recovery_manager(lambda: get_state_snapshot()["current_primary_url"])
     heartbeat_stop_event.clear()
     heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
     heartbeat_thread.start()
-    yield
-    heartbeat_stop_event.set()
+    try:
+        yield
+    finally:
+        heartbeat_stop_event.set()
+        stop_heartbeat()
+        stop_recovery_manager()
 
 
 app = FastAPI(title="Distributed Chat System", lifespan=lifespan)
@@ -673,3 +700,224 @@ def request_vote(payload: RaftVoteRequest):
             "responder_id": NODE_ID,
         }
 
+    if payload.term > state["raft_current_term"]:
+        update_raft_state(term=payload.term, role="follower", reset_vote=True)
+
+    state = get_state_snapshot()
+    can_vote = state["raft_voted_for"] in {None, payload.candidate_id}
+    candidate_up_to_date = payload.last_logical_timestamp >= local_last_logical_timestamp
+    vote_granted = can_vote and candidate_up_to_date
+
+    if vote_granted:
+        update_raft_state(voted_for=payload.candidate_id, role="follower", leader_contact=True)
+
+    return {
+        "term": get_state_snapshot()["raft_current_term"],
+        "vote_granted": vote_granted,
+        "responder_id": NODE_ID,
+    }
+
+
+@app.post("/raft/append-entries", response_model=RaftAppendEntriesResponse)
+def append_entries(payload: RaftAppendEntriesRequest):
+    state = get_state_snapshot()
+    if payload.term < state["raft_current_term"]:
+        return {"term": state["raft_current_term"], "success": False}
+
+    update_raft_state(
+        term=payload.term,
+        role="follower",
+        commit_index=payload.commit_index,
+        reset_vote=payload.term > state["raft_current_term"],
+        leader_contact=True,
+    )
+    update_cluster_state(primary_url=payload.leader_url, known_nodes=payload.known_nodes)
+    return {"term": get_state_snapshot()["raft_current_term"], "success": True}
+
+
+@app.post("/time-sync", response_model=TimeSyncResponse)
+def time_sync(payload: TimeSyncRequest):
+    server_receive_time_ms = current_physical_time_ms()
+    state = get_state_snapshot()
+    server_send_time_ms = current_physical_time_ms()
+    return {
+        "current_primary_url": state["current_primary_url"],
+        "own_url": state["own_url"],
+        "server_receive_time_ms": server_receive_time_ms,
+        "server_send_time_ms": server_send_time_ms,
+    }
+
+
+@app.post("/register")
+def register(url: str):
+    state = get_state_snapshot()
+    if not state["is_primary"]:
+        forwarded = forward_register_to_primary(url)
+        if forwarded is not None:
+            return forwarded
+        state = get_state_snapshot()
+
+    update_cluster_state(known_nodes=state["known_nodes"] + [url])
+    register_replica(url)
+
+    synced_messages = 0
+    try:
+        with httpx.Client() as client:
+            for message in get_all_messages():
+                response = client.post(
+                    f"{url}/replicate",
+                    json=message,
+                    timeout=2.0,
+                )
+                response.raise_for_status()
+                synced_messages += 1
+        print(f"[SYNC] Sent {synced_messages} existing messages to {url}")
+    except Exception:
+        print(f"[SYNC FAILED] Could not sync to {url}")
+
+    state = get_state_snapshot()
+    return {
+        "status": "registered",
+        "replicas": REPLICAS,
+        "synced_messages": synced_messages,
+        "current_primary_url": state["current_primary_url"],
+        "known_nodes": state["known_nodes"],
+    }
+
+
+@app.post("/announce-primary")
+def announce_primary(payload: LeaderAnnouncement):
+    state = update_cluster_state(
+        primary_url=payload.new_primary_url,
+        known_nodes=payload.known_nodes,
+    )
+    if state["is_primary"]:
+        update_raft_state(term=max(1, state["raft_current_term"]), voted_for=NODE_ID, role="leader", leader_contact=True)
+        ensure_logical_clock_floor()
+        ensure_raft_commit_index_floor()
+        update_time_sync(offset_ms=0, sync_time_ms=current_physical_time_ms(), status="leader-local", rtt_ms=0)
+    else:
+        update_raft_state(role="follower", leader_contact=True)
+    return {"status": "updated", **get_state_snapshot()}
+
+
+@app.post("/replicate", response_model=ReplicationAcknowledgement)
+def receive_replicated_message(message: MessageResponse):
+    body = message.model_dump()
+    wal_write(body)
+    try:
+        stored = add_message(body)
+        wal_commit(message.id)
+    except Exception:
+        wal_fail(message.id)
+        raise
+    update_raft_state(commit_index=message.logical_timestamp)
+    if stored:
+        print(
+            f"[REPLICATED] {message.sender} -> {message.receiver}: "
+            f"{message.content} (logical={message.logical_timestamp})"
+        )
+    else:
+        print(f"[DEDUP] Skipped already replicated message {message.id[:8]}")
+    return {**body, "status": "replicated" if stored else "duplicate skipped"}
+
+
+@app.post("/send", response_model=MessageResponse)
+def send_message(request: MessageRequest, forwarded_from: str = None):
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="Message text cannot be empty")
+
+    state = get_state_snapshot()
+    if not state["is_primary"]:
+        forwarded = forward_send_to_primary(request)
+        if forwarded is not None:
+            return forwarded
+
+    message = build_message(request)
+    wal_write(message)
+    try:
+        add_message(message)
+        replicate_to_all(message, skip_url=forwarded_from)
+        wal_commit(message["id"])
+    except Exception as exc:
+        wal_fail(message["id"])
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    print(
+        f"[NEW MESSAGE] {message['sender']} -> {message['receiver']}: "
+        f"{message['content']} (logical={message['logical_timestamp']}, term={get_state_snapshot()['raft_current_term']})"
+    )
+    return message
+
+
+@app.get("/messages", response_model=List[MessageResponse])
+def get_messages(receiver: str = None):
+    if receiver:
+        return get_messages_for(receiver)
+    return get_all_messages()
+
+
+@app.delete("/messages")
+def clear_messages():
+    clear_all()
+    with state_lock:
+        global logical_clock, raft_commit_index
+        logical_clock = 0
+        raft_commit_index = 0
+    return {"status": "All messages cleared"}
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "node": OWN_URL,
+            "timestamp": iso_from_ms(corrected_time_ms())}
+
+
+@app.get("/role")
+def role():
+    state = get_state_snapshot()
+    return {"role": "primary" if state["is_primary"] else "replica",
+            "node": OWN_URL, "primary": state["current_primary_url"]}
+
+
+@app.get("/status")
+def get_status():
+    state = get_state_snapshot()
+    return {**state, "current_primary": state["current_primary_url"],
+            "alive_servers": get_alive_servers(), "replicas": get_replica_status(),
+            "message_count": len(get_all_messages()),
+            "timestamp": iso_from_ms(corrected_time_ms())}
+
+
+@app.get("/ft-status")
+def fault_tolerance_status():
+    return get_fault_tolerance_status()
+
+
+@app.get("/sync")
+def sync_messages(since: str = None):
+    return [message for message in get_all_messages()
+            if since is None or message["timestamp"] > since]
+
+
+@app.post("/rejoin")
+def rejoin(url: str, since: str = None):
+    state = get_state_snapshot()
+    if not state["is_primary"]:
+        raise HTTPException(status_code=409, detail="Recovery must use the current primary")
+    recovered = 0
+    failed = 0
+    with httpx.Client() as client:
+        for message in sync_messages(since):
+            try:
+                response = client.post(f"{url}/replicate", json=message, timeout=2.0)
+                response.raise_for_status()
+                recovered += 1
+            except Exception:
+                failed += 1
+    update_cluster_state(known_nodes=state["known_nodes"] + [url])
+    register_replica(url)
+    if failed:
+        mark_replica_down(url)
+    return {"status": "recovery complete" if not failed else "recovery incomplete",
+            "messages_sent": recovered, "messages_failed": failed,
+            "node": url, "delta_sync": since is not None}
