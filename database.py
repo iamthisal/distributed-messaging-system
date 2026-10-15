@@ -1,11 +1,10 @@
+from threading import Lock
 from typing import List
-import threading
 
 
-# In-memory message store protected by a lock.
 messages: List[dict] = []
-message_ids: set = set()
-messages_lock = threading.Lock()
+message_ids: set[str] = set()
+messages_lock = Lock()
 
 
 def _message_sort_key(message: dict):
@@ -17,9 +16,6 @@ def _message_sort_key(message: dict):
 
 
 def add_message(message: dict) -> bool:
-    """
-    Add a message if its id hasn't been seen. Returns True if stored, False if duplicate.
-    """
     with messages_lock:
         message_id = message.get("id")
         if message_id and message_id in message_ids:
@@ -53,7 +49,6 @@ def get_highest_logical_timestamp() -> int:
 
 
 def clear_all() -> None:
-    """Clear all messages and reset seen IDs (useful for testing)."""
     with messages_lock:
         messages.clear()
         message_ids.clear()

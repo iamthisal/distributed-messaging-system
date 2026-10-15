@@ -1,18 +1,32 @@
-from pydantic import BaseModel
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
 
 class MessageRequest(BaseModel):
-    sender : str
-    receiver : str
-    content : str
+    sender: str
+    receiver: str
+    content: str
+
 
 class MessageResponse(BaseModel):
-    id : str
-    sender : str
-    receiver : str
-    content : str
-    timestamp : str
+    id: str
+    sender: str
+    receiver: str
+    content: str
+    timestamp: str
     corrected_timestamp: str
     logical_timestamp: int
+
+
+class ReplicatedMessageResponse(MessageResponse):
+    replication_status: str = "full"
+    warning: Optional[str] = None
+
+
+class LeaderAnnouncement(BaseModel):
+    new_primary_url: str
+    known_nodes: List[str] = Field(default_factory=list)
 
 
 class TimeSyncRequest(BaseModel):
@@ -26,3 +40,27 @@ class TimeSyncResponse(BaseModel):
     server_send_time_ms: int
 
 
+class RaftVoteRequest(BaseModel):
+    candidate_id: int
+    candidate_url: str
+    term: int
+    last_logical_timestamp: int
+
+
+class RaftVoteResponse(BaseModel):
+    term: int
+    vote_granted: bool
+    responder_id: int
+
+
+class RaftAppendEntriesRequest(BaseModel):
+    leader_id: int
+    leader_url: str
+    term: int
+    commit_index: int
+    known_nodes: List[str] = Field(default_factory=list)
+
+
+class RaftAppendEntriesResponse(BaseModel):
+    term: int
+    success: bool
