@@ -1,20 +1,14 @@
-<<<<<<< Updated upstream
-=======
 import os
 import sys
 import threading
 import time
->>>>>>> Stashed changes
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List
 
 from fastapi import FastAPI, HTTPException
 
-<<<<<<< Updated upstream
-from database import add_message, get_messages_for, get_all_messages, clear_all
-from models import MessageRequest,MessageResponse
-=======
 from database import (
     add_message,
     clear_all,
@@ -105,7 +99,7 @@ def ensure_logical_clock_floor():
         return logical_clock
 
 
-def update_cluster_state(primary_url: str = None, known_nodes: list[str] = None):
+def update_cluster_state(primary_url: str = None, known_nodes: List[str] = None):
     global CURRENT_PRIMARY_URL, KNOWN_NODES, logical_clock
 
     with state_lock:
@@ -312,6 +306,8 @@ def forward_send_to_primary(request: MessageRequest):
     state = get_state_snapshot()
 
     try:
+        import httpx
+
         with httpx.Client() as client:
             response = client.post(
                 f"{state['current_primary_url']}/send",
@@ -328,6 +324,8 @@ def forward_send_to_primary(request: MessageRequest):
             return None
 
     try:
+        import httpx
+
         with httpx.Client() as client:
             response = client.post(
                 f"{new_primary_url}/send",
@@ -347,6 +345,8 @@ def forward_register_to_primary(url: str):
     state = get_state_snapshot()
 
     try:
+        import httpx
+
         with httpx.Client() as client:
             response = client.post(
                 f"{state['current_primary_url']}/register",
@@ -361,6 +361,8 @@ def forward_register_to_primary(url: str):
             return None
 
     try:
+        import httpx
+
         with httpx.Client() as client:
             response = client.post(
                 f"{new_primary_url}/register",
@@ -454,6 +456,8 @@ def register(url: str):
 
     synced_messages = 0
     try:
+        import httpx
+
         with httpx.Client() as client:
             for message in get_all_messages():
                 response = client.post(
@@ -500,33 +504,13 @@ def receive_replicated_message(message: MessageResponse):
     else:
         print(f"[DEDUP] Skipped already replicated message {message.id[:8]}")
     return message
->>>>>>> Stashed changes
 
-app = FastAPI(title="Distributed Chat System")
 
 @app.post("/send", response_model=MessageResponse)
 def send_message(request: MessageRequest):
-    """
-    Client calls this to send a message.
-    The server assigns a unique ID and timestamp, then stores it.
-    """
     if not request.content.strip():
         raise HTTPException(status_code=400, detail="Message text cannot be empty")
 
-<<<<<<< Updated upstream
-    message = {
-        "id": str(uuid.uuid4()),  # unique message ID
-        "sender": request.sender,
-        "receiver": request.receiver,
-        "content": request.content,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-    add_message(message)
-
-    print(f"[NEW MESSAGE] {message['sender']} → {message['receiver']}: {message['content']}")
-
-=======
     state = get_state_snapshot()
     if not state["is_primary"]:
         forwarded = forward_send_to_primary(request)
@@ -540,7 +524,6 @@ def send_message(request: MessageRequest):
         f"{message['content']} (logical={message['logical_timestamp']})"
     )
     replicate_to_all(message)
->>>>>>> Stashed changes
     return message
 
 
@@ -562,13 +545,3 @@ def clear_messages():
         global logical_clock
         logical_clock = 0
     return {"status": "All messages cleared"}
-
-
-
-
-
-
-
-
-
-
